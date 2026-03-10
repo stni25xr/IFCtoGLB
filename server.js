@@ -20,6 +20,15 @@ const CONVERT_TIMEOUT_MS =
   Number.isFinite(configuredTimeout) && configuredTimeout > 0
     ? configuredTimeout
     : DEFAULT_CONVERT_TIMEOUT_MS;
+const CONVERTER_CHECK_TTL_MS = 1000 * 60 * 5;
+const CONVERSION_CACHE_FILE = path.join(OUTPUT_DIR, ".conversion-cache.json");
+const conversionCache = new Map();
+const inFlightByHash = new Map();
+const converterStatus = {
+  checkedAt: 0,
+  value: null,
+  pending: null
+};
 
 const ensureDir = async (dir) => {
   await fs.mkdir(dir, { recursive: true });
@@ -62,6 +71,77 @@ const canRunConverter = async () => {
     proc.once("error", () => resolve(false));
     proc.once("close", (code) => resolve(code === 0 || code === 1));
   });
+};
+
+const getConverterAvailability = async ({ force = false } = {}) => {
+  const now = Date.now();
+  const fresh =
+    converterStatus.value !== null && now - converterStatus.checkedAt < CONVERTER_CHECK_TTL_MS;
+
+  if (!force && fresh) {
+    return converterStatus.value;
+  }
+
+  if (converterStatus.pending) {
+    return converterStatus.pending;
+  }
+
+  converterStatus.pending = canRunConverter()
+    .then((value) => {
+      converterStatus.value = value;
+      converterStatus.checkedAt = Date.now();
+      return value;
+    })
+    .finally(() => {
+      converterStatus.pending = null;
+    });
+
+  return converterStatus.pending;
+};
+
+const computeFileHash = async (filePath) => {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fssync.createReadStream(filePath);
+
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+};
+
+const loadConversionCache = async () => {
+  try {
+    const text = await fs.readFile(CONVERSION_CACHE_FILE, "utf8");
+    const parsed = JSON.parse(text);
+    for (const [hash, fileName] of Object.entries(parsed)) {
+      if (typeof hash === "string" && typeof fileName === "string") {
+        conversionCache.set(hash, fileName);
+      }
+    }
+  } catch {
+    // No cache file yet.
+  }
+};
+
+const persistConversionCache = async () => {
+  const payload = Object.fromEntries(conversionCache);
+  await fs.writeFile(CONVERSION_CACHE_FILE, JSON.stringify(payload), "utf8");
+};
+
+const pruneConversionCache = async () => {
+  let changed = false;
+  for (const [hash, fileName] of conversionCache.entries()) {
+    const resolvedPath = path.join(OUTPUT_DIR, fileName);
+    if (!(await fileExists(resolvedPath))) {
+      conversionCache.delete(hash);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await persistConversionCache();
+  }
 };
 
 const runIfcConvert = async (inputPath, outputPath) => {
@@ -120,7 +200,7 @@ const cleanupExpiredFiles = async (dirPath) => {
 
   await Promise.all(
     entries
-      .filter((entry) => entry.isFile())
+      .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
       .map(async (entry) => {
         const fullPath = path.join(dirPath, entry.name);
         const stats = await fs.stat(fullPath);
@@ -173,7 +253,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(ROOT_DIR, "public")));
 
 app.get("/api/health", async (_req, res) => {
-  const converterAvailable = await canRunConverter();
+  const converterAvailable = await getConverterAvailability();
   res.json({
     ok: true,
     converter: CONVERTER_BIN,
@@ -189,20 +269,18 @@ app.post("/api/convert", upload.single("ifcFile"), async (req, res) => {
   }
 
   const startedAt = Date.now();
-  const originalBase = sanitizeBaseName(path.parse(req.file.originalname).name);
   const token = crypto.randomUUID().slice(0, 8);
-  const outputFileName = `${originalBase}-${token}.glb`;
-  const outputPath = path.join(OUTPUT_DIR, outputFileName);
   const inputPath = req.file.path;
   const requestTag = `${Date.now().toString(36)}-${token}`;
   const inputMb = (req.file.size / (1024 * 1024)).toFixed(2);
+  let requestHash = "";
 
   console.log(
-    `[convert:start] id=${requestTag} input=${req.file.originalname} sizeMb=${inputMb} output=${outputFileName}`
+    `[convert:start] id=${requestTag} input=${req.file.originalname} sizeMb=${inputMb}`
   );
 
   try {
-    const converterAvailable = await canRunConverter();
+    const converterAvailable = await getConverterAvailability();
     if (!converterAvailable) {
       console.error(`[convert:error] id=${requestTag} reason=converter-not-available`);
       res.status(500).json({
@@ -211,19 +289,89 @@ app.post("/api/convert", upload.single("ifcFile"), async (req, res) => {
       return;
     }
 
-    await runIfcConvert(inputPath, outputPath);
+    const fileHash = await computeFileHash(inputPath);
+    requestHash = fileHash;
+    const hashPrefix = fileHash.slice(0, 12);
+    const cachedName = conversionCache.get(fileHash);
+
+    if (cachedName) {
+      const cachedPath = path.join(OUTPUT_DIR, cachedName);
+      if (await fileExists(cachedPath)) {
+        await fs.utimes(cachedPath, new Date(), new Date()).catch(() => {});
+        const tookMs = Date.now() - startedAt;
+        console.log(
+          `[convert:cache-hit] id=${requestTag} hash=${hashPrefix} output=${cachedName} durationMs=${tookMs}`
+        );
+        res.json({
+          ok: true,
+          fileName: cachedName,
+          downloadUrl: `/api/download/${encodeURIComponent(cachedName)}`,
+          previewUrl: `/api/view/${encodeURIComponent(cachedName)}`,
+          cached: true
+        });
+        return;
+      }
+
+      conversionCache.delete(fileHash);
+      await persistConversionCache().catch(() => {});
+    }
+
+    if (inFlightByHash.has(fileHash)) {
+      const sharedFileName = await inFlightByHash.get(fileHash);
+      const tookMs = Date.now() - startedAt;
+      console.log(
+        `[convert:shared] id=${requestTag} hash=${hashPrefix} output=${sharedFileName} durationMs=${tookMs}`
+      );
+      res.json({
+        ok: true,
+        fileName: sharedFileName,
+        downloadUrl: `/api/download/${encodeURIComponent(sharedFileName)}`,
+        previewUrl: `/api/view/${encodeURIComponent(sharedFileName)}`,
+        cached: true
+      });
+      return;
+    }
+
+    const outputFileName = `ifc-${hashPrefix}.glb`;
+    const outputPath = path.join(OUTPUT_DIR, outputFileName);
+
+    const convertPromise = (async () => {
+      if (await fileExists(outputPath)) {
+        conversionCache.set(fileHash, outputFileName);
+        await persistConversionCache().catch(() => {});
+        return outputFileName;
+      }
+
+      await runIfcConvert(inputPath, outputPath);
+      conversionCache.set(fileHash, outputFileName);
+      await persistConversionCache().catch(() => {});
+      return outputFileName;
+    })();
+
+    inFlightByHash.set(fileHash, convertPromise);
+    let completedFileName = "";
+    try {
+      completedFileName = await convertPromise;
+    } finally {
+      inFlightByHash.delete(fileHash);
+    }
+
     const tookMs = Date.now() - startedAt;
     console.log(
-      `[convert:done] id=${requestTag} output=${outputFileName} durationMs=${tookMs}`
+      `[convert:done] id=${requestTag} hash=${hashPrefix} output=${completedFileName} durationMs=${tookMs}`
     );
 
     res.json({
       ok: true,
-      fileName: outputFileName,
-      downloadUrl: `/api/download/${encodeURIComponent(outputFileName)}`,
-      previewUrl: `/api/view/${encodeURIComponent(outputFileName)}`
+      fileName: completedFileName,
+      downloadUrl: `/api/download/${encodeURIComponent(completedFileName)}`,
+      previewUrl: `/api/view/${encodeURIComponent(completedFileName)}`,
+      cached: false
     });
   } catch (error) {
+    if (requestHash) {
+      inFlightByHash.delete(requestHash);
+    }
     const tookMs = Date.now() - startedAt;
     console.error(
       `[convert:error] id=${requestTag} durationMs=${tookMs} message="${error.message || "Conversion failed."}"`
@@ -284,11 +432,17 @@ app.use((err, _req, res, _next) => {
 const bootstrap = async () => {
   await ensureDir(UPLOAD_DIR);
   await ensureDir(OUTPUT_DIR);
+  await loadConversionCache();
+  await pruneConversionCache();
+  await getConverterAvailability({ force: true });
 
   setInterval(() => {
-    Promise.all([cleanupExpiredFiles(UPLOAD_DIR), cleanupExpiredFiles(OUTPUT_DIR)]).catch(
-      () => {}
-    );
+    Promise.all([
+      cleanupExpiredFiles(UPLOAD_DIR),
+      cleanupExpiredFiles(OUTPUT_DIR),
+      pruneConversionCache(),
+      getConverterAvailability({ force: true })
+    ]).catch(() => {});
   }, 1000 * 60 * 30).unref();
 
   app.listen(PORT, () => {

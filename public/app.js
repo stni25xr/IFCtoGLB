@@ -291,8 +291,10 @@ form.addEventListener("submit", async (event) => {
     setViewerState({ previewUrl: withApiBase(data.previewUrl) });
     showResult({
       ok: true,
-      title: "Done",
-      text: `${data.fileName} is ready to download.`,
+      title: data.cached ? "Done (Cached)" : "Done",
+      text: data.cached
+        ? `${data.fileName} was served from cache and is ready to download.`
+        : `${data.fileName} is ready to download.`,
       downloadUrl: data.downloadUrl,
       fileName: data.fileName
     });
