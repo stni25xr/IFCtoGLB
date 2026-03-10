@@ -11,6 +11,12 @@ Modern web application to upload IFC files and convert them to GLB using `IfcCon
 - Health check endpoint (`/api/health`)
 - Temporary file cleanup
 
+## Architecture
+
+- Frontend: static files in [`public/`](./public) (also reachable from repo root for GitHub Pages)
+- Backend: Node/Express service in [`server.js`](./server.js)
+- Converter: `IfcConvert` binary (server-side)
+
 ## Requirements
 
 - Node.js 18+
@@ -30,6 +36,35 @@ npm run start
 ```
 
 Open: [http://localhost:3000](http://localhost:3000)
+
+## Publish frontend on GitHub Pages
+
+1. In GitHub repository settings, open **Pages**.
+2. Set source to:
+   - **Branch:** `main`
+   - **Folder:** `/ (root)`
+3. Save.
+4. Open: `https://stni25xr.github.io/IFCtoGLB/`
+
+The root [`index.html`](./index.html) redirects to the actual app page in [`public/index.html`](./public/index.html).
+
+## Deploy backend on Render (Docker)
+
+This repo includes:
+
+- [`Dockerfile`](./Dockerfile): installs Node + IfcConvert + app
+- [`render.yaml`](./render.yaml): Render blueprint
+
+Steps:
+
+1. In Render, create a new **Blueprint** service from this GitHub repo.
+2. Deploy using `render.yaml`.
+3. Copy your backend URL after deploy, for example:
+   - `https://ifctoglb-backend.onrender.com`
+4. Open the frontend (`https://stni25xr.github.io/IFCtoGLB/`).
+5. In the app, set **Backend API URL** to your Render URL and click **Save**.
+
+After this, uploads/conversion/download/preview run against the deployed backend.
 
 ## API
 

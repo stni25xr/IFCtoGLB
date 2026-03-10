@@ -154,6 +154,59 @@ h1 {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.api-config {
+  margin-top: 20px;
+  padding: 14px;
+  border: 1px solid #d2dde7;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.api-config label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 700;
+  color: #324458;
+  font-size: 0.9rem;
+}
+
+.api-config-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.api-config input {
+  width: 100%;
+  border: 1px solid #c3d1de;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: #1f2d3d;
+  background: #fff;
+}
+
+.api-config button {
+  border: 1px solid #1a8e71;
+  background: #0eaf8a;
+  color: #fff;
+  border-radius: 10px;
+  padding: 0 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.api-config button:hover {
+  filter: brightness(1.06);
+}
+
+.api-config p {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  color: #536277;
+  line-height: 1.45;
+}
+
 .status-pill {
   margin-top: 22px;
   display: inline-flex;
@@ -433,5 +486,13 @@ h2 {
 
   .viewer-stage {
     height: 290px;
+  }
+
+  .api-config-row {
+    grid-template-columns: 1fr;
+  }
+
+  .api-config button {
+    height: 40px;
   }
 }

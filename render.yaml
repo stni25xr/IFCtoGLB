@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: ifctoglb-backend
+    env: docker
+    plan: free
+    branch: main
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /api/health

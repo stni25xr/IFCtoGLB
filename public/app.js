@@ -15,10 +15,27 @@ const healthPill = document.getElementById("health-pill");
 const glbViewer = document.getElementById("glb-viewer");
 const viewerPlaceholder = document.getElementById("viewer-placeholder");
 const resetViewBtn = document.getElementById("reset-view-btn");
+const apiBaseInput = document.getElementById("api-base-input");
+const saveApiBaseBtn = document.getElementById("save-api-base-btn");
 
 let selectedIfcFile = null;
 let progressTimer = null;
 let currentPreviewUrl = "";
+let apiBase = (window.APP_API_BASE || "").trim().replace(/\/+$/, "");
+
+const getApiUrl = (path) => {
+  return apiBase ? `${apiBase}${path}` : path;
+};
+
+const withApiBase = (url) => {
+  if (!url) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(url)) {
+    return url;
+  }
+  return getApiUrl(url);
+};
 
 const setProgress = (value, message) => {
   const bounded = Math.max(0, Math.min(100, value));
@@ -54,7 +71,7 @@ const showResult = ({ ok, title, text, downloadUrl, fileName }) => {
 
   if (ok && downloadUrl) {
     downloadLink.classList.remove("hidden");
-    downloadLink.href = downloadUrl;
+    downloadLink.href = withApiBase(downloadUrl);
     downloadLink.download = fileName || "converted.glb";
   } else {
     downloadLink.classList.add("hidden");
@@ -137,6 +154,32 @@ fileInput.addEventListener("change", (event) => {
   setSelectedFile(file);
 });
 
+if (saveApiBaseBtn && apiBaseInput) {
+  apiBaseInput.value = apiBase;
+
+  saveApiBaseBtn.addEventListener("click", () => {
+    const nextBase = (apiBaseInput.value || "").trim().replace(/\/+$/, "");
+    apiBase = nextBase;
+    localStorage.setItem("ifctoglb_api_base", apiBase);
+    checkHealth();
+  });
+}
+
+if (apiBaseInput) {
+  apiBaseInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveApiBaseBtn?.click();
+    }
+  });
+}
+
+if (window.location.hostname.endsWith("github.io") && !apiBase && healthPill) {
+  healthPill.classList.remove("online");
+  healthPill.classList.add("offline");
+  healthPill.textContent = "Set Backend API URL, then click Save.";
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   resultCard.classList.add("hidden");
@@ -157,7 +200,7 @@ form.addEventListener("submit", async (event) => {
     const payload = new FormData();
     payload.append("ifcFile", selectedIfcFile);
 
-    const response = await fetch("/api/convert", {
+    const response = await fetch(getApiUrl("/api/convert"), {
       method: "POST",
       body: payload
     });
@@ -168,7 +211,7 @@ form.addEventListener("submit", async (event) => {
     }
 
     stopFakeProgress(100, "Conversion complete");
-    setViewerState({ previewUrl: data.previewUrl });
+    setViewerState({ previewUrl: withApiBase(data.previewUrl) });
     showResult({
       ok: true,
       title: "Done",
@@ -221,7 +264,7 @@ if (glbViewer && viewerPlaceholder) {
 
 const checkHealth = async () => {
   try {
-    const response = await fetch("/api/health");
+    const response = await fetch(getApiUrl("/api/health"));
     const data = await response.json();
 
     if (data.converterAvailable) {
