@@ -9,6 +9,7 @@ const { spawn } = require("child_process");
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CONVERTER_BIN = process.env.IFC_CONVERTER_BIN || "IfcConvert";
+const LOG_IFCCONVERT_STDERR = process.env.LOG_IFCCONVERT_STDERR === "true";
 const ROOT_DIR = __dirname;
 const UPLOAD_DIR = path.join(ROOT_DIR, "uploads");
 const OUTPUT_DIR = path.join(ROOT_DIR, "outputs");
@@ -87,6 +88,9 @@ const runIfcConvert = async (inputPath, outputPath) => {
 
     proc.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
+      if (LOG_IFCCONVERT_STDERR) {
+        process.stdout.write(`[IfcConvert][stderr] ${chunk.toString()}`);
+      }
     });
 
     proc.once("error", (error) => {
@@ -184,15 +188,23 @@ app.post("/api/convert", upload.single("ifcFile"), async (req, res) => {
     return;
   }
 
+  const startedAt = Date.now();
   const originalBase = sanitizeBaseName(path.parse(req.file.originalname).name);
   const token = crypto.randomUUID().slice(0, 8);
   const outputFileName = `${originalBase}-${token}.glb`;
   const outputPath = path.join(OUTPUT_DIR, outputFileName);
   const inputPath = req.file.path;
+  const requestTag = `${Date.now().toString(36)}-${token}`;
+  const inputMb = (req.file.size / (1024 * 1024)).toFixed(2);
+
+  console.log(
+    `[convert:start] id=${requestTag} input=${req.file.originalname} sizeMb=${inputMb} output=${outputFileName}`
+  );
 
   try {
     const converterAvailable = await canRunConverter();
     if (!converterAvailable) {
+      console.error(`[convert:error] id=${requestTag} reason=converter-not-available`);
       res.status(500).json({
         error: `Converter '${CONVERTER_BIN}' was not found. Install IfcConvert and ensure it is in PATH.`
       });
@@ -200,6 +212,10 @@ app.post("/api/convert", upload.single("ifcFile"), async (req, res) => {
     }
 
     await runIfcConvert(inputPath, outputPath);
+    const tookMs = Date.now() - startedAt;
+    console.log(
+      `[convert:done] id=${requestTag} output=${outputFileName} durationMs=${tookMs}`
+    );
 
     res.json({
       ok: true,
@@ -208,6 +224,10 @@ app.post("/api/convert", upload.single("ifcFile"), async (req, res) => {
       previewUrl: `/api/view/${encodeURIComponent(outputFileName)}`
     });
   } catch (error) {
+    const tookMs = Date.now() - startedAt;
+    console.error(
+      `[convert:error] id=${requestTag} durationMs=${tookMs} message="${error.message || "Conversion failed."}"`
+    );
     res.status(500).json({
       error: error.message || "Conversion failed."
     });
