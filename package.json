@@ -1,0 +1,15 @@
+{
+  "name": "ifc-to-glb-converter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Modern web app for converting IFC files to GLB",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.0.2"
+  }
+}

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IFC to GLB Converter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        IFC to GLB
+      </div>
+      <nav class="top-nav">
+        <a href="#converter">Converter</a>
+        <a href="#preview">Preview</a>
+        <a href="#how">How it works</a>
+      </nav>
+    </header>
+
+    <main class="layout">
+      <section class="panel hero" id="how">
+        <p class="eyebrow">BIM Pipeline</p>
+        <h1>Convert IFC files to lightweight GLB in one flow.</h1>
+        <p class="lead">
+          Upload your IFC model, run server-side conversion, and download the final GLB file
+          directly in your browser.
+        </p>
+        <ul class="feature-list">
+          <li>Geometry + materials preserved by `IfcConvert`</li>
+          <li>No third-party upload service</li>
+          <li>Single-click download after conversion</li>
+        </ul>
+        <div class="status-pill" id="health-pill">Checking converter status...</div>
+      </section>
+
+      <section class="panel converter" id="converter">
+        <h2>Upload IFC</h2>
+
+        <form id="convert-form" novalidate>
+          <label class="dropzone" id="dropzone" for="ifc-file">
+            <input id="ifc-file" name="ifcFile" type="file" accept=".ifc" />
+            <span class="dropzone-title">Drop your `.ifc` file here</span>
+            <span class="dropzone-sub">or click to browse</span>
+            <span class="selected-file" id="selected-file">No file selected</span>
+          </label>
+
+          <button id="convert-btn" type="submit">Convert to GLB</button>
+        </form>
+
+        <div class="progress-card hidden" id="progress-card">
+          <div class="progress-head">
+            <span id="progress-label">Preparing conversion...</span>
+            <span id="progress-value">0%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+        </div>
+
+        <section class="result-card hidden" id="result-card">
+          <h3 id="result-title"></h3>
+          <p id="result-text"></p>
+          <a id="download-link" class="download-btn hidden" href="#">Download GLB</a>
+        </section>
+
+        <section class="viewer-card" id="preview">
+          <div class="viewer-head">
+            <h3>Live 3D Preview</h3>
+            <button id="reset-view-btn" type="button">Reset view</button>
+          </div>
+
+          <div class="viewer-stage">
+            <model-viewer
+              id="glb-viewer"
+              camera-controls
+              touch-action="pan-y"
+              exposure="1.1"
+              shadow-intensity="1"
+              camera-orbit="35deg 70deg 130%"
+              min-camera-orbit="auto 10deg auto"
+              max-camera-orbit="auto 170deg auto"
+              ar-status="not-presenting"
+            ></model-viewer>
+            <div class="viewer-placeholder" id="viewer-placeholder">
+              Convert a file to preview your GLB model here.
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
