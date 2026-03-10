@@ -13,6 +13,12 @@ const ROOT_DIR = __dirname;
 const UPLOAD_DIR = path.join(ROOT_DIR, "uploads");
 const OUTPUT_DIR = path.join(ROOT_DIR, "outputs");
 const FILE_TTL_MS = 1000 * 60 * 60 * 12;
+const DEFAULT_CONVERT_TIMEOUT_MS = 1000 * 60 * 20;
+const configuredTimeout = Number.parseInt(process.env.CONVERT_TIMEOUT_MS || "", 10);
+const CONVERT_TIMEOUT_MS =
+  Number.isFinite(configuredTimeout) && configuredTimeout > 0
+    ? configuredTimeout
+    : DEFAULT_CONVERT_TIMEOUT_MS;
 
 const ensureDir = async (dir) => {
   await fs.mkdir(dir, { recursive: true });
@@ -61,22 +67,45 @@ const runIfcConvert = async (inputPath, outputPath) => {
   return new Promise((resolve, reject) => {
     const proc = spawn(CONVERTER_BIN, [inputPath, outputPath]);
     let stderr = "";
+    let settled = false;
+
+    const finishError = (message) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutId);
+      reject(new Error(message));
+    };
+
+    const timeoutId = setTimeout(() => {
+      proc.kill("SIGKILL");
+      finishError(
+        `Conversion timed out after ${Math.ceil(CONVERT_TIMEOUT_MS / 60000)} minutes.`
+      );
+    }, CONVERT_TIMEOUT_MS);
 
     proc.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
 
     proc.once("error", (error) => {
-      reject(error);
+      finishError(error.message || "Failed to start IfcConvert.");
     });
 
     proc.once("close", (code) => {
+      if (settled) {
+        return;
+      }
+      clearTimeout(timeoutId);
+
       if (code === 0 && fssync.existsSync(outputPath)) {
+        settled = true;
         resolve();
         return;
       }
 
-      reject(new Error(stderr.trim() || `IfcConvert exited with code ${code}.`));
+      finishError(stderr.trim() || `IfcConvert exited with code ${code}.`);
     });
   });
 };
@@ -144,7 +173,8 @@ app.get("/api/health", async (_req, res) => {
   res.json({
     ok: true,
     converter: CONVERTER_BIN,
-    converterAvailable
+    converterAvailable,
+    convertTimeoutMs: CONVERT_TIMEOUT_MS
   });
 });
 

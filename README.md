@@ -9,6 +9,7 @@ Modern web application to upload IFC files and convert them to GLB using `IfcCon
 - Download endpoint for generated GLB (`/api/download/:fileName`)
 - Inline GLB preview endpoint (`/api/view/:fileName`)
 - Health check endpoint (`/api/health`)
+- Frontend cancel/timeout handling for long conversions
 - Temporary file cleanup
 
 ## Architecture
@@ -26,6 +27,12 @@ If `IfcConvert` is installed elsewhere, set:
 
 ```bash
 export IFC_CONVERTER_BIN="/path/to/IfcConvert"
+```
+
+Optional conversion timeout (milliseconds, default 20 min):
+
+```bash
+export CONVERT_TIMEOUT_MS="1200000"
 ```
 
 ## Run locally

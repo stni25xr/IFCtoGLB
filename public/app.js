@@ -7,6 +7,8 @@ const progressCard = document.getElementById("progress-card");
 const progressFill = document.getElementById("progress-fill");
 const progressValue = document.getElementById("progress-value");
 const progressLabel = document.getElementById("progress-label");
+const progressElapsed = document.getElementById("progress-elapsed");
+const cancelConvertBtn = document.getElementById("cancel-convert-btn");
 const resultCard = document.getElementById("result-card");
 const resultTitle = document.getElementById("result-title");
 const resultText = document.getElementById("result-text");
@@ -20,8 +22,13 @@ const saveApiBaseBtn = document.getElementById("save-api-base-btn");
 
 let selectedIfcFile = null;
 let progressTimer = null;
+let elapsedTimer = null;
+let progressStartedAt = 0;
 let currentPreviewUrl = "";
+let currentAbortController = null;
+let requestTimedOut = false;
 let apiBase = (window.APP_API_BASE || "").trim().replace(/\/+$/, "");
+const CLIENT_CONVERT_TIMEOUT_MS = 1000 * 60 * 12;
 
 const getApiUrl = (path) => {
   return apiBase ? `${apiBase}${path}` : path;
@@ -37,10 +44,32 @@ const withApiBase = (url) => {
   return getApiUrl(url);
 };
 
-const setProgress = (value, message) => {
+const formatElapsed = (ms) => {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60)
+    .toString()
+    .padStart(2, "0");
+  const seconds = (totalSeconds % 60).toString().padStart(2, "0");
+  return `${minutes}:${seconds}`;
+};
+
+const updateElapsed = () => {
+  if (!progressElapsed || !progressStartedAt) {
+    return;
+  }
+  progressElapsed.textContent = `Elapsed: ${formatElapsed(Date.now() - progressStartedAt)}`;
+};
+
+const setProgress = (value, message, state = "normal") => {
   const bounded = Math.max(0, Math.min(100, value));
   progressFill.style.width = `${bounded}%`;
-  progressValue.textContent = `${Math.round(bounded)}%`;
+  if (state === "waiting") {
+    progressFill.classList.add("waiting");
+    progressValue.textContent = "Running...";
+  } else {
+    progressFill.classList.remove("waiting");
+    progressValue.textContent = `${Math.round(bounded)}%`;
+  }
   if (message) {
     progressLabel.textContent = message;
   }
@@ -88,22 +117,47 @@ const isIfcFile = (file) => {
   return Boolean(file && file.name.toLowerCase().endsWith(".ifc"));
 };
 
-const startFakeProgress = () => {
+const clearProgressTimers = () => {
   clearInterval(progressTimer);
+  clearInterval(elapsedTimer);
+};
+
+const startConversionProgress = () => {
+  clearProgressTimers();
+  progressStartedAt = Date.now();
   progressCard.classList.remove("hidden");
-  setProgress(2, "Uploading IFC...");
+  setProgress(3, "Uploading IFC...");
+  updateElapsed();
+
+  if (cancelConvertBtn) {
+    cancelConvertBtn.disabled = false;
+  }
+
+  elapsedTimer = setInterval(() => {
+    updateElapsed();
+  }, 1000);
 
   progressTimer = setInterval(() => {
     const current = Number.parseFloat(progressFill.style.width) || 0;
-    if (current < 90) {
-      setProgress(current + Math.random() * 7, "Converting model...");
+    if (current < 92) {
+      const delta =
+        current < 50 ? 6 + Math.random() * 3 : current < 80 ? 1.8 + Math.random() * 1.4 : 0.4;
+      setProgress(Math.min(92, current + delta), "Converting model...");
+      return;
     }
-  }, 280);
+
+    setProgress(96, "IfcConvert is still processing this model...", "waiting");
+  }, 900);
 };
 
-const stopFakeProgress = (finalValue, message) => {
-  clearInterval(progressTimer);
+const stopConversionProgress = (finalValue, message) => {
+  clearProgressTimers();
+  updateElapsed();
   setProgress(finalValue, message);
+  progressFill.classList.remove("waiting");
+  if (cancelConvertBtn) {
+    cancelConvertBtn.disabled = true;
+  }
 };
 
 dropzone.addEventListener("dragover", (event) => {
@@ -193,8 +247,24 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (window.location.hostname.endsWith("github.io") && !apiBase) {
+    showResult({
+      ok: false,
+      title: "Backend URL required",
+      text: "Set Backend API URL and click Save before converting."
+    });
+    return;
+  }
+
   convertBtn.disabled = true;
-  startFakeProgress();
+  requestTimedOut = false;
+  currentAbortController = new AbortController();
+  startConversionProgress();
+
+  const timeoutId = setTimeout(() => {
+    requestTimedOut = true;
+    currentAbortController?.abort();
+  }, CLIENT_CONVERT_TIMEOUT_MS);
 
   try {
     const payload = new FormData();
@@ -202,15 +272,22 @@ form.addEventListener("submit", async (event) => {
 
     const response = await fetch(getApiUrl("/api/convert"), {
       method: "POST",
-      body: payload
+      body: payload,
+      signal: currentAbortController.signal
     });
 
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || "Conversion failed.");
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
     }
 
-    stopFakeProgress(100, "Conversion complete");
+    if (!response.ok) {
+      throw new Error(data.error || `Conversion failed (HTTP ${response.status}).`);
+    }
+
+    stopConversionProgress(100, "Conversion complete");
     setViewerState({ previewUrl: withApiBase(data.previewUrl) });
     showResult({
       ok: true,
@@ -220,7 +297,27 @@ form.addEventListener("submit", async (event) => {
       fileName: data.fileName
     });
   } catch (error) {
-    stopFakeProgress(0, "Conversion failed");
+    const aborted = error?.name === "AbortError";
+    if (aborted) {
+      if (requestTimedOut) {
+        stopConversionProgress(0, "Conversion timed out");
+        showResult({
+          ok: false,
+          title: "Conversion timed out",
+          text: "The request took too long. Try a smaller IFC file or try again later."
+        });
+      } else {
+        stopConversionProgress(0, "Conversion canceled");
+        showResult({
+          ok: false,
+          title: "Conversion canceled",
+          text: "Conversion was canceled before completion."
+        });
+      }
+      return;
+    }
+
+    stopConversionProgress(0, "Conversion failed");
     setViewerState({
       previewUrl: "",
       message: "Conversion failed. Try another IFC file to render a preview."
@@ -231,9 +328,22 @@ form.addEventListener("submit", async (event) => {
       text: error.message || "Something went wrong while converting the file."
     });
   } finally {
+    clearTimeout(timeoutId);
+    currentAbortController = null;
     convertBtn.disabled = false;
   }
 });
+
+if (cancelConvertBtn) {
+  cancelConvertBtn.addEventListener("click", () => {
+    if (!currentAbortController) {
+      return;
+    }
+    cancelConvertBtn.disabled = true;
+    requestTimedOut = false;
+    currentAbortController.abort();
+  });
+}
 
 if (resetViewBtn) {
   resetViewBtn.addEventListener("click", () => {
@@ -263,9 +373,21 @@ if (glbViewer && viewerPlaceholder) {
 }
 
 const checkHealth = async () => {
+  if (window.location.hostname.endsWith("github.io") && !apiBase) {
+    healthPill.classList.remove("online");
+    healthPill.classList.add("offline");
+    healthPill.textContent = "Set Backend API URL, then click Save.";
+    return;
+  }
+
   try {
     const response = await fetch(getApiUrl("/api/health"));
-    const data = await response.json();
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
 
     if (data.converterAvailable) {
       healthPill.classList.remove("offline");
